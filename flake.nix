@@ -5,7 +5,7 @@
 {
   description = "Spex development environment flake";
 
-  inputs = { nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.05"; };
+  inputs = { nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.11"; };
 
   outputs = { self, nixpkgs }:
     let
@@ -27,6 +27,7 @@
         (with pkgs.python311Packages; [
           pip
           jsonschema
+          types-jsonschema
           mypy
           isort
           black

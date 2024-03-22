@@ -4,20 +4,21 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional, Protocol
+from typing import Dict, List, Optional, Protocol
 
-from spex.jsonspec.defs import JSON, ToJson
+from spex.jsonspec.defs import JSON
 
 
 class Code(Enum):
     O1000 = "general error"
 
-    T1000 = "error parsing table"
+    T1000 = "error parsing table - the table's columns implied it should be parsed but some quirk of the table caused the parser to fail"
     T1001 = "field overlaps with range of prior field"
     T1002 = "gap between this and the prior field"
     T1004 = "row order wrong, bits should be in desc order, bytes in asc order"
     T1006 = "non-standard table header"
     T1007 = "table skipped"
+    T1008 = "failed to extract figure ID from table header"
 
     L1000 = "error extracting label"
     L1001 = "empty label"
@@ -45,6 +46,7 @@ class LintErr(Enum):
     TBL_ROW_ORDER_REVERSED = Code.T1004
     TBL_HDR_ERR = Code.T1006
     TBL_SKIPPED = Code.T1007
+    TBL_FIG_ID_EXTRACT_ERR = Code.T1008
 
     LBL_EXTRACT_ERR = Code.L1000
     LBL_EMPTY = Code.L1001
@@ -99,6 +101,10 @@ class LintEntry:
             ret["row"] = self.row
         return ret
 
+    @property
+    def code(self) -> str:
+        return self.err.value.name
+
 
 class Linter(Protocol):
     def add_issue(
@@ -110,4 +116,7 @@ class Linter(Protocol):
         row_key: Optional[str] = None,
         ctx: Optional[Dict[str, JSON]] = None,
     ) -> None:
+        ...
+
+    def lint_entries(self) -> List[LintEntry]:
         ...

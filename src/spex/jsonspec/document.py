@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from argparse import Namespace
 from re import compile as re_compile
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple, Type, TypeAlias
 
@@ -12,6 +11,7 @@ from spex.jsonspec.defs import JSON, Entity, EntityMeta, cast_json
 from spex.jsonspec.extractors.structtable import BitsTableExtractor, BytesTableExtractor
 from spex.jsonspec.extractors.valuetable import ValueTableExtractor
 from spex.jsonspec.lint import LintEntry, Linter, LintErr
+from spex.jsonspec.parserargs import ParserArgs
 from spex.logging import ULog
 from spex.xml import XmlUtils, Xpath
 
@@ -52,15 +52,15 @@ class DocLinter:
         )
         self._lint_issues.append(l_entry)
 
-    def to_json(self) -> JSON:
-        return [l_entry.to_json() for l_entry in self._lint_issues]
+    def lint_entries(self) -> List[LintEntry]:
+        return [*self._lint_issues]
 
 
 class DocumentParser:
     rgx_fig_id = re_compile(r"Figure\s+(?P<figid>[^\s^:]+).*")
     fig_extractor_overrides: Dict[str, Type["FigureExtractor"]] = {}
 
-    def __init__(self, args: Namespace, doc: "ElementTree", spec: str, revision: str):
+    def __init__(self, args: ParserArgs, doc: "ElementTree", spec: str, revision: str):
         self.__args = args
         self.__doc = doc
         self.__spec = spec
@@ -68,12 +68,13 @@ class DocumentParser:
         self.__linter = DocLinter()
         self.__post_init__()
         self._unwind_parse_error = False
+        self.__fig_id_missing_counter = 0
 
     def __post_init__(self) -> None:
         ...
 
     @property
-    def args(self) -> Namespace:
+    def args(self) -> ParserArgs:
         """Return CLI args."""
         return self.__args
 
@@ -142,11 +143,36 @@ class DocumentParser:
         """Extract figure ID from its title."""
         # Extract figure ID, all figures should have one
         m = self.rgx_fig_id.match(figure_title)
-        assert m is not None, f"failed to extract figure ID from {figure_title}"
+        if m is None:
+            logger.log(
+                ULog.ERROR,
+                f"failed extracting title from figure header {figure_title!r}",
+            )
+            fig_id = self.__fig_id_missing_counter
+            self.__fig_id_missing_counter = fig_id + 1
+
+            self.linter.add_issue(
+                LintErr.TBL_FIG_ID_EXTRACT_ERR,
+                f"FIG_ID_MISSING[{fig_id}]",
+                ctx={"title": figure_title},
+            )
+            raise RuntimeError(f"failed to extract figure ID from {figure_title!r}")
         return m.group("figid")
 
+    def _figures(self) -> List["Element"]:
+        return Xpath.elems(self.doc, "./body/table")
+
+    @property
+    def num_figures(self) -> int:
+        """Return estimate of number of figures in document.
+
+        NOTE: some figures may be skipped due to missing information
+              so this value represents an upper bound on the number of
+              figures being processed."""
+        return len(self._figures())
+
     def iter_figures(self) -> Iterator[Tuple[EntityMeta, "Element"]]:
-        for tbl in Xpath.elems(self.doc, "./body/table"):
+        for tbl in self._figures():
             # Kludge: should be fixed in source documents, but a few tables
             # (Fig202, Fig223 in Base 2.0c spec) are wrapped in an extra table
             inner_tbl = Xpath.elem_first(tbl, "./tr[1]/td[1]/*[1]")
@@ -163,7 +189,11 @@ class DocumentParser:
             if figure_title is None:
                 continue
 
-            figure_id = self._on_extract_figure_id(figure_title)
+            try:
+                figure_id = self._on_extract_figure_id(figure_title)
+            except RuntimeError:
+                # see caller - skip figure
+                continue
             yield {
                 "title": figure_title,
                 "fig_id": figure_id,
@@ -257,6 +287,11 @@ class DocumentParser:
                         logger.log(ULog.ERROR, f"failed parsing figure {entity!r}")
                         logger.exception("exception when parsing figure")
                         self._unwind_parse_error = True
+                        self.linter.add_issue(
+                            LintErr.TBL_PARSE_ERR,
+                            entity["fig_id"],
+                            ctx={"title": entity["title"]},
+                        )
                     else:
                         logger.log(ULog.ERROR, f"  in {entity!r}")
 
